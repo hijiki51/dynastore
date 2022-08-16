@@ -24,9 +24,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -58,7 +59,7 @@ type Store struct {
 	ttlField   string
 	codecs     []securecookie.Codec
 	config     *aws.Config
-	ddb        *dynamodb.DynamoDB
+	ddb        *dynamodb.Client
 	serializer serializer
 	options    sessions.Options
 	printf     func(format string, args ...interface{})
@@ -155,15 +156,14 @@ func New(opts ...Option) (*Store, error) {
 				region = os.Getenv("AWS_REGION")
 			}
 
-			store.config = &aws.Config{Region: aws.String(region)}
+			store.config = &aws.Config{
+				Region: region,
+			}
 		}
 
-		s, err := session.NewSession(store.config)
-		if err != nil {
-			return nil, err
-		}
+		db := dynamodb.NewFromConfig(*store.config)
 
-		store.ddb = dynamodb.New(s)
+		store.ddb = db
 	}
 
 	if len(store.codecs) > 0 {
@@ -185,10 +185,10 @@ func (store *Store) save(ctx context.Context, name string, session *sessions.Ses
 	if store.ttlField != "" && session.Options != nil && session.Options.MaxAge > 0 {
 		expiresAt := time.Now().Add(time.Duration(session.Options.MaxAge) * time.Second)
 		ttl := strconv.FormatInt(expiresAt.Unix(), 10)
-		av[store.ttlField] = &dynamodb.AttributeValue{N: aws.String(ttl)}
+		av[store.ttlField] = &types.AttributeValueMemberN{Value: ttl}
 	}
 
-	_, err = store.ddb.PutItemWithContext(ctx, &dynamodb.PutItemInput{
+	_, err = store.ddb.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(store.tableName),
 		Item:      av,
 	})
@@ -201,10 +201,11 @@ func (store *Store) save(ctx context.Context, name string, session *sessions.Ses
 }
 
 func (store *Store) delete(ctx context.Context, id string) error {
-	_, err := store.ddb.DeleteItemWithContext(ctx, &dynamodb.DeleteItemInput{
+
+	_, err := store.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(store.tableName),
-		Key: map[string]*dynamodb.AttributeValue{
-			"id": {S: aws.String(id)},
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
 		},
 	})
 	if err != nil {
@@ -217,11 +218,11 @@ func (store *Store) delete(ctx context.Context, id string) error {
 // load loads a session data from the database.
 // True is returned if there is a session data in the database.
 func (store *Store) load(ctx context.Context, name, value string, session *sessions.Session) error {
-	out, err := store.ddb.GetItemWithContext(ctx, &dynamodb.GetItemInput{
+	out, err := store.ddb.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName:      aws.String(store.tableName),
 		ConsistentRead: aws.Bool(true),
-		Key: map[string]*dynamodb.AttributeValue{
-			"id": {S: aws.String(value)},
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: value},
 		},
 	})
 	if err != nil {
@@ -236,15 +237,13 @@ func (store *Store) load(ctx context.Context, name, value string, session *sessi
 
 	ttl := int64(0)
 	if av, ok := out.Item[store.ttlField]; ok {
-		if av.N == nil {
-			store.printf("dynastore: no ttl associated with session\n")
-			return errMalformedSession
-		}
-		v, err := strconv.ParseInt(*av.N, 10, 64)
+		var v int64
+		err := attributevalue.Unmarshal(av, &v)
 		if err != nil {
-			store.printf("dynastore: malformed session - %v\n", err)
+			store.printf("dynastore: failed to unmarshal ttl - %v\n", err)
 			return errMalformedSession
 		}
+
 		ttl = v
 	}
 
@@ -263,6 +262,6 @@ func (store *Store) load(ctx context.Context, name, value string, session *sessi
 }
 
 type serializer interface {
-	marshal(name string, session *sessions.Session) (map[string]*dynamodb.AttributeValue, error)
-	unmarshal(name string, in map[string]*dynamodb.AttributeValue, session *sessions.Session) error
+	marshal(name string, session *sessions.Session) (map[string]types.AttributeValue, error)
+	unmarshal(name string, in map[string]types.AttributeValue, session *sessions.Session) error
 }

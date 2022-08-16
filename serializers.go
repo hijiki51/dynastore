@@ -19,9 +19,8 @@ import (
 	"encoding/base64"
 	"encoding/gob"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -30,19 +29,19 @@ type codecSerializer struct {
 	codecs []securecookie.Codec
 }
 
-func (c *codecSerializer) marshal(name string, session *sessions.Session) (map[string]*dynamodb.AttributeValue, error) {
+func (c *codecSerializer) marshal(name string, session *sessions.Session) (map[string]types.AttributeValue, error) {
 	values, err := securecookie.EncodeMulti(name, session.Values, c.codecs...)
 	if err != nil {
 		return nil, errEncodeFailed
 	}
 
-	av := map[string]*dynamodb.AttributeValue{
-		idField:     {S: aws.String(session.ID)},
-		valuesField: {S: aws.String(values)},
+	av := map[string]types.AttributeValue{
+		idField:     &types.AttributeValueMemberS{Value: session.ID},
+		valuesField: &types.AttributeValueMemberS{Value: values},
 	}
 
 	if session.Options != nil {
-		options, err := dynamodbattribute.Marshal(session.Options)
+		options, err := attributevalue.Marshal(session.Options)
 		if err != nil {
 			return nil, err
 		}
@@ -52,27 +51,40 @@ func (c *codecSerializer) marshal(name string, session *sessions.Session) (map[s
 	return av, nil
 }
 
-func (c *codecSerializer) unmarshal(name string, in map[string]*dynamodb.AttributeValue, session *sessions.Session) error {
+func (c *codecSerializer) unmarshal(name string, in map[string]types.AttributeValue, session *sessions.Session) error {
 	if len(in) == 0 {
 		return errNotFound
 	}
 
 	// id
 	av, ok := in[idField]
-	if !ok || av.S == nil {
+	if !ok {
 		return errMalformedSession
 	}
-	id := *av.S
+
+	var id string
+
+	err := attributevalue.Unmarshal(av, &id)
+	if err != nil {
+		return errMalformedSession
+	}
 
 	// payload
 
 	av, ok = in[valuesField]
-	if !ok || av.S == nil {
+	if !ok {
+		return errMalformedSession
+	}
+
+	var pl string
+
+	err = attributevalue.Unmarshal(av, &pl)
+	if err != nil {
 		return errMalformedSession
 	}
 
 	values := map[interface{}]interface{}{}
-	err := securecookie.DecodeMulti(name, *av.S, &values, c.codecs...)
+	err = securecookie.DecodeMulti(name, pl, &values, c.codecs...)
 	if err != nil {
 		return errDecodeFailed
 	}
@@ -86,7 +98,7 @@ func (c *codecSerializer) unmarshal(name string, in map[string]*dynamodb.Attribu
 	av, ok = in[optionsField]
 	if ok {
 		options := &sessions.Options{}
-		err = dynamodbattribute.Unmarshal(av, options)
+		err = attributevalue.Unmarshal(av, options)
 		if err != nil {
 			return err
 		}
@@ -99,7 +111,7 @@ func (c *codecSerializer) unmarshal(name string, in map[string]*dynamodb.Attribu
 type gobSerializer struct {
 }
 
-func (d *gobSerializer) marshal(name string, session *sessions.Session) (map[string]*dynamodb.AttributeValue, error) {
+func (d *gobSerializer) marshal(name string, session *sessions.Session) (map[string]types.AttributeValue, error) {
 	buf := &bytes.Buffer{}
 	err := gob.NewEncoder(buf).Encode(session.Values)
 	if err != nil {
@@ -107,15 +119,15 @@ func (d *gobSerializer) marshal(name string, session *sessions.Session) (map[str
 	}
 	values := base64.StdEncoding.EncodeToString(buf.Bytes())
 
-	av := map[string]*dynamodb.AttributeValue{
-		idField:     {S: aws.String(session.ID)},
-		valuesField: {S: aws.String(values)},
+	av := map[string]types.AttributeValue{
+		idField:     &types.AttributeValueMemberS{Value: session.ID},
+		valuesField: &types.AttributeValueMemberS{Value: values},
 	}
 
 	// encode options
 
 	if session.Options != nil {
-		options, err := dynamodbattribute.Marshal(session.Options)
+		options, err := attributevalue.Marshal(session.Options)
 		if err != nil {
 			return nil, err
 		}
@@ -125,26 +137,38 @@ func (d *gobSerializer) marshal(name string, session *sessions.Session) (map[str
 	return av, nil
 }
 
-func (d *gobSerializer) unmarshal(name string, in map[string]*dynamodb.AttributeValue, session *sessions.Session) error {
+func (d *gobSerializer) unmarshal(name string, in map[string]types.AttributeValue, session *sessions.Session) error {
 	if len(in) == 0 {
 		return errNotFound
 	}
 
 	// id
 	av, ok := in[idField]
-	if !ok || av.S == nil {
+	if !ok {
 		return errMalformedSession
 	}
-	id := *av.S
+	var id string
+
+	err := attributevalue.Unmarshal(av, &id)
+	if err != nil {
+		return errMalformedSession
+	}
 
 	// payload
 
 	av, ok = in[valuesField]
-	if !ok && av.S != nil {
+	if !ok {
 		return errMalformedSession
 	}
 
-	data, err := base64.StdEncoding.DecodeString(*av.S)
+	var pl string
+
+	err = attributevalue.Unmarshal(av, &pl)
+	if err != nil {
+		return errMalformedSession
+	}
+
+	data, err := base64.StdEncoding.DecodeString(pl)
 	if err != nil {
 		return errDecodeFailed
 	}
@@ -163,7 +187,7 @@ func (d *gobSerializer) unmarshal(name string, in map[string]*dynamodb.Attribute
 	av, ok = in[optionsField]
 	if ok {
 		options := &sessions.Options{}
-		err = dynamodbattribute.Unmarshal(av, options)
+		err = attributevalue.Unmarshal(av, options)
 		if err != nil {
 			return err
 		}

@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -42,7 +42,7 @@ func AWSConfig(config *aws.Config) Option {
 }
 
 // DynamoDB allows a pre-configured dynamodb client to be supplied
-func DynamoDB(ddb *dynamodb.DynamoDB) Option {
+func DynamoDB(ddb *dynamodb.Client) Option {
 	return func(s *Store) {
 		s.ddb = ddb
 	}

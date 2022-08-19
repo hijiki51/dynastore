@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/aws/aws-sdk-go-v2 v1.16.11
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.9.11
-	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.15.13
+	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.16.0
 	github.com/gorilla/securecookie v1.1.1
 	github.com/gorilla/sessions v1.2.1
 )
